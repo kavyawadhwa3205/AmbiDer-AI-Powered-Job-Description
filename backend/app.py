@@ -66,8 +66,8 @@ def register():
         # Fallback simple SHA-256 hash
         hashed_pw = hashlib.sha256(password.encode('utf-8')).hexdigest()
         
-    db_client = get_db()
     try:
+        db_client = get_db()
         db_client.execute(
             "INSERT INTO users (full_name, email, password) VALUES (?, ?, ?)",
             (full_name, email, hashed_pw)
@@ -89,8 +89,8 @@ def login():
     email = data.get("email")
     password = data.get("password")
 
-    db_client = get_db()
     try:
+        db_client = get_db()
         result = db_client.execute("SELECT id, full_name, email, password FROM users WHERE email = ?", (email,))
         if not result.rows:
             return jsonify({"error": "Invalid email or password"}), 401
@@ -117,8 +117,8 @@ def login():
 @jwt_required()
 def get_me():
     user_id = get_jwt_identity()
-    db_client = get_db()
     try:
+        db_client = get_db()
         result = db_client.execute("SELECT id, full_name, email FROM users WHERE id = ?", (user_id,))
         if result.rows:
             user = result.rows[0]
@@ -298,9 +298,8 @@ def generate_jd():
 def save_jd():
     data = request.get_json()
     user_id = get_jwt_identity()
-    db_client = get_db()
-    
     try:
+        db_client = get_db()
         db_client.execute(
             """INSERT INTO saved_jds (user_id, job_title, industry, company_name, experience, skills, tone, department, location, jd_text)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -370,8 +369,8 @@ def save_edit():
     if not jd_id:
         return jsonify({"error": "Missing jd_id"}), 400
 
-    db_client = get_db()
     try:
+        db_client = get_db()
         db_client.execute(
             "INSERT INTO jd_edits (jd_id, instruction, updated_jd) VALUES (?, ?, ?)",
             (jd_id, instruction, updated_jd)
@@ -391,9 +390,8 @@ def save_edit():
 def get_saved_jds():
     user_id = get_jwt_identity()
     search = request.args.get("search", "")
-    db_client = get_db()
-    
     try:
+        db_client = get_db()
         query = "SELECT id, job_title, company_name, industry, created_at, jd_text FROM saved_jds WHERE user_id = ?"
         params = [user_id]
         
@@ -426,8 +424,8 @@ def get_saved_jds():
 @jwt_required()
 def delete_saved_jd(jd_id):
     user_id = get_jwt_identity()
-    db_client = get_db()
     try:
+        db_client = get_db()
         check = db_client.execute("SELECT id FROM saved_jds WHERE id = ? AND user_id = ?", (jd_id, user_id))
         if not check.rows:
             return jsonify({"error": "JD not found or unauthorized"}), 404
@@ -444,8 +442,8 @@ def delete_saved_jd(jd_id):
 @jwt_required()
 def get_history():
     user_id = get_jwt_identity()
-    db_client = get_db()
     try:
+        db_client = get_db()
         jds_result = db_client.execute(
             "SELECT id, job_title, industry, created_at, jd_text, company_name FROM saved_jds WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,)
@@ -482,8 +480,8 @@ def get_history():
 @jwt_required()
 def get_analytics():
     user_id = get_jwt_identity()
-    db_client = get_db()
     try:
+        db_client = get_db()
         r1 = db_client.execute("SELECT COUNT(*) FROM saved_jds WHERE user_id = ?", (user_id,))
         total_jds = r1.rows[0][0]
 
