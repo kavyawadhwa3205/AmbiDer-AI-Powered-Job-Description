@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Mic, Sparkles, ChevronRight, Lightbulb, CheckCircle2 } from 'lucide-react';
 import './InputForm.css';
+import API_BASE from '../config';
 
 const DEPARTMENTS = [
   'Engineering', 'Human Resources', 'Marketing', 'Sales',
@@ -128,7 +129,7 @@ function InputForm({ onGenerate, initialData }) {
     });
     
     try {
-      const res = await fetch('http://127.0.0.1:5001/api/generate', {
+      const res = await fetch(`${API_BASE}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -153,7 +154,7 @@ function InputForm({ onGenerate, initialData }) {
         onGenerate(data.jd, formData);
       }
     } catch (err) {
-      setError('Failed to connect to the server. Make sure Flask is running on port 5001.');
+      setError('Failed to connect to the backend server. Please try again.');
     } finally {
       setLoading(false);
     }

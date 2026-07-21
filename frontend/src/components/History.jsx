@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Clock, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
 import './Pages.css';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://ambi-der-ai-powered-job-description-eight.vercel.app/api';
+import API_BASE from '../config';
 
 function History() {
   const [history, setHistory] = useState([]);

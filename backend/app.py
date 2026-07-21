@@ -28,7 +28,13 @@ try:
 except Exception as e:
     print("Warning: Failed to initialize database on startup (missing env vars?):", e)
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "ambider-jd-secret-2025")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
@@ -44,9 +50,10 @@ else:
 # --- Authentication Endpoints ---
 
 @app.route("/", methods=["GET"])
+@app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({
-        "status": "ok",
+        "status": "Flask is running",
         "message": "AmbiDer API Backend is running smoothly!"
     }), 200
 
@@ -599,4 +606,4 @@ Respond ONLY with a JSON object in this exact format, no other text:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    app.run(debug=False)

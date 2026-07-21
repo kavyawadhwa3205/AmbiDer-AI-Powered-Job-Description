@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import './LoginPage.css';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://ambi-der-ai-powered-job-description-eight.vercel.app/api';
+import API_BASE from '../config';
 
 function LoginPage({ onLoginSuccess }) {
   const [isRegistering, setIsRegistering] = useState(false);

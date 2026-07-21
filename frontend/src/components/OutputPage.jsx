@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import './OutputPage.css';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://ambi-der-ai-powered-job-description-eight.vercel.app/api';
+import API_BASE from '../config';
 
 const ENHANCE_OPTIONS = [
   { label: 'Make More Professional', icon: Briefcase, instruction: 'Rewrite this JD in a more formal and professional tone' },

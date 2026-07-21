@@ -14,7 +14,7 @@ import Templates from './components/Templates';
 import Settings from './components/Settings';
 import './App.css';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://ambi-der-ai-powered-job-description-eight.vercel.app/api';
+import API_BASE from './config';
 
 function App() {
   const [theme, setTheme] = useState(localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));

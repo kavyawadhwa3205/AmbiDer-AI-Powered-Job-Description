@@ -4,7 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 
 import './Reports.css';
 import './Pages.css';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://ambi-der-ai-powered-job-description-eight.vercel.app/api';
+import API_BASE from '../config';
 
 function Reports() {
   const [jds, setJds] = useState([]);
