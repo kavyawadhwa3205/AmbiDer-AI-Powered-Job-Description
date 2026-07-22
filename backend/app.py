@@ -22,11 +22,17 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Initialize database tables on startup
-try:
-    init_db()
-except Exception as e:
-    print("Warning: Failed to initialize database on startup (missing env vars?):", e)
+_db_initialized = False
+
+@app.before_request
+def ensure_db_initialized():
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+            _db_initialized = True
+        except Exception as e:
+            print("Warning: Failed to initialize database:", e)
 
 CORS(app, resources={
     r"/*": {
