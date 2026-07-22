@@ -6,10 +6,19 @@ import libsql_client
 load_dotenv()
 
 def get_db():
-    return libsql_client.create_client_sync(
-        url=os.getenv("TURSO_DATABASE_URL"),
-        auth_token=os.getenv("TURSO_AUTH_TOKEN")
-    )
+    url = os.getenv("TURSO_DATABASE_URL")
+    auth_token = os.getenv("TURSO_AUTH_TOKEN")
+    
+    if url and auth_token:
+        try:
+            client = libsql_client.create_client_sync(url=url, auth_token=auth_token)
+            client.execute("SELECT 1")
+            return client
+        except Exception as e:
+            print(f"Warning: Turso DB connection failed ({e}). Falling back to local SQLite.")
+            
+    db_path = os.path.join(os.path.dirname(__file__), "app.db")
+    return libsql_client.create_client_sync(url=f"file:{db_path}")
 
 def init_db():
     client = get_db()

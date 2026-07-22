@@ -29,7 +29,7 @@ except Exception as e:
     print("Warning: Failed to initialize database on startup (missing env vars?):", e)
 
 CORS(app, resources={
-    r"/api/*": {
+    r"/*": {
         "origins": "*",
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
@@ -50,6 +50,7 @@ else:
 # --- Authentication Endpoints ---
 
 @app.route("/", methods=["GET"])
+@app.route("/health", methods=["GET"])
 @app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({
@@ -57,6 +58,7 @@ def health_check():
         "message": "AmbiDer API Backend is running smoothly!"
     }), 200
 
+@app.route("/auth/register", methods=["POST"])
 @app.route("/api/auth/register", methods=["POST"])
 def register():
     data = request.get_json()
@@ -91,6 +93,7 @@ def register():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/auth/login", methods=["POST"])
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -122,6 +125,7 @@ def login():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/auth/me", methods=["GET"])
 @app.route("/api/auth/me", methods=["GET"])
 @jwt_required()
 def get_me():
@@ -246,6 +250,7 @@ FINAL CHECK BEFORE OUTPUTTING:
 
     return prompt
 
+@app.route("/generate", methods=["POST"])
 @app.route("/api/generate", methods=["POST"])
 @jwt_required(optional=True)
 def generate_jd():
@@ -303,6 +308,7 @@ def generate_jd():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/save", methods=["POST"])
 @app.route("/api/save", methods=["POST"])
 @jwt_required()
 def save_jd():
@@ -339,6 +345,7 @@ def save_jd():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/edit", methods=["POST"])
 @app.route("/api/edit", methods=["POST"])
 @jwt_required(optional=True)
 def edit_jd():
@@ -369,6 +376,7 @@ Apply the change and return the complete updated Job Description keeping the sam
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/save/edit", methods=["POST"])
 @app.route("/api/save/edit", methods=["POST"])
 @jwt_required()
 def save_edit():
@@ -397,6 +405,7 @@ def save_edit():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/saved", methods=["GET"])
 @app.route("/api/saved", methods=["GET"])
 @jwt_required()
 def get_saved_jds():
@@ -433,6 +442,7 @@ def get_saved_jds():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/saved/<int:jd_id>", methods=["DELETE"])
 @app.route("/api/saved/<int:jd_id>", methods=["DELETE"])
 @jwt_required()
 def delete_saved_jd(jd_id):
@@ -452,6 +462,7 @@ def delete_saved_jd(jd_id):
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/history", methods=["GET"])
 @app.route("/api/history", methods=["GET"])
 @jwt_required()
 def get_history():
@@ -491,6 +502,7 @@ def get_history():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/analytics", methods=["GET"])
 @app.route("/api/analytics", methods=["GET"])
 @jwt_required()
 def get_analytics():
@@ -553,6 +565,7 @@ def get_analytics():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+@app.route("/ats-score", methods=["POST"])
 @app.route("/api/ats-score", methods=["POST"])
 @jwt_required(optional=True)
 def ats_score():
