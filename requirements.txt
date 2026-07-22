@@ -1,0 +1,10 @@
+flask
+flask-cors
+flask-jwt-extended
+bcrypt
+python-dotenv
+groq
+gunicorn
+certifi
+libsql-client
+libsql-experimental

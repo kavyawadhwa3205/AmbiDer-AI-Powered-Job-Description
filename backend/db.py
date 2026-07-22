@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 from dotenv import load_dotenv
 
@@ -7,11 +8,39 @@ try:
 except Exception:
     libsql_client = None
 
-# Load environment variables at the very beginning
 load_dotenv()
 
+class SQLiteResultSet:
+    def __init__(self, rows):
+        self.rows = rows
+
+class SQLiteClientWrapper:
+    def __init__(self, db_path):
+        self.db_path = db_path
+
+    def _get_conn(self):
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        return conn
+
+    def execute(self, sql, params=()):
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            if sql.strip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER")):
+                conn.commit()
+            if cursor.description:
+                rows = cursor.fetchall()
+            else:
+                rows = []
+            return SQLiteResultSet(rows)
+        finally:
+            conn.close()
+
+    def close(self):
+        pass
+
 def get_db_path():
-    # On Vercel or read-only environments, write to /tmp
     if os.getenv("VERCEL") or not os.access(os.path.dirname(__file__) or ".", os.W_OK):
         return os.path.join(tempfile.gettempdir(), "app.db")
     return os.path.join(os.path.dirname(__file__), "app.db")
@@ -27,12 +56,15 @@ def get_db():
             return client
         except Exception as e:
             print(f"Warning: Turso DB connection failed ({e}). Falling back to local SQLite.")
-            
+
     db_path = get_db_path()
     if libsql_client:
-        return libsql_client.create_client_sync(url=f"file:{db_path}")
-    else:
-        raise RuntimeError("libsql_client package is not installed")
+        try:
+            return libsql_client.create_client_sync(url=f"file:{db_path}")
+        except Exception as e:
+            print(f"Warning: libsql_client file connection failed ({e}). Using sqlite3 wrapper.")
+
+    return SQLiteClientWrapper(db_path)
 
 def init_db():
     try:
