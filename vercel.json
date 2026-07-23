@@ -22,8 +22,16 @@
       "dest": "api/index.py"
     },
     {
-      "src": "/(.*)",
+      "src": "/assets/(.*)",
+      "dest": "frontend/dist/assets/$1"
+    },
+    {
+      "src": "/(favicon\\.png|favicon_icon\\.png|icons\\.svg|logo\\.png|logo\\.svg)",
       "dest": "frontend/dist/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/dist/index.html"
     }
   ]
 }
