@@ -20,7 +20,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r backend/requirements.txt
       - run: python -m compileall -q api backend
-      - run: python backend/test_security.py && python backend/test_database.py && python backend/test_integration.py
+      - run: python backend/test_security.py && python backend/test_database.py && python backend/test_integration.py && python backend/test_vercel_cold_start.py
 
   frontend:
     runs-on: ubuntu-latest

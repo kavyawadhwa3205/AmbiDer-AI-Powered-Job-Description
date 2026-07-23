@@ -30,6 +30,7 @@ class ApiIntegrationTestCase(unittest.TestCase):
             JWT_SECRET_KEY="test-signing-key-that-is-longer-than-thirty-two-characters",
         )
         self.client = self.app.test_client()
+        app_module.limiter.storage.reset()
 
     def tearDown(self):
         self.database_patch.stop()
