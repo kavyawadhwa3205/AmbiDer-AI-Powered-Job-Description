@@ -1,9 +1,11 @@
+-c ../constraints.txt
 flask
 flask-cors
 flask-jwt-extended
+flask-limiter
+redis
 bcrypt
 libsql-client
-libsql-experimental
 python-dotenv
 groq
 gunicorn
