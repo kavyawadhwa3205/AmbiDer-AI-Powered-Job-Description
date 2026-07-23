@@ -140,6 +140,22 @@ def health_check():
     ), 200
 
 
+@app.route("/ready", methods=["GET"])
+@app.route("/api/ready", methods=["GET"])
+def readiness_check():
+    if not client:
+        return jsonify(
+            {"status": "not ready", "error": "AI service is not configured"}
+        ), 503
+    try:
+        db_client = get_db()
+        db_client.execute("SELECT 1")
+        db_client.close()
+        return jsonify({"status": "ready"}), 200
+    except Exception:
+        return jsonify({"status": "not ready", "error": "Database is unavailable"}), 503
+
+
 @app.route("/auth/register", methods=["POST"])
 @app.route("/api/auth/register", methods=["POST"])
 @limiter.limit("5 per hour")
