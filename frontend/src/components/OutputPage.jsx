@@ -1,16 +1,5 @@
 import { useCallback, useState, useEffect, useRef } from "react";
-import jsPDF from "jspdf";
 import ReactMarkdown from "react-markdown";
-import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  Footer,
-  AlignmentType,
-  BorderStyle,
-} from "docx";
-import { saveAs } from "file-saver";
 import {
   Code,
   Briefcase,
@@ -284,6 +273,7 @@ function OutputPage({
 
   const handleDownloadPDF = async () => {
     try {
+      const { default: jsPDF } = await import("jspdf");
       const pdf = new jsPDF("p", "mm", "a4");
       const jobTitle = formData?.job_title || "Job Description";
       const industry = formData?.industry || "";
@@ -458,6 +448,16 @@ function OutputPage({
   };
 
   const handleDownloadDOCX = async () => {
+    const {
+      AlignmentType,
+      BorderStyle,
+      Document,
+      Footer,
+      Packer,
+      Paragraph,
+      TextRun,
+    } = await import("docx");
+    const { saveAs } = await import("file-saver");
     const jobTitle = formData?.job_title || "Job Description";
     const industry = formData?.industry || "";
     const company = formData?.company_name || "";
