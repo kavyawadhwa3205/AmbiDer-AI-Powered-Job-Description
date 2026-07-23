@@ -1,50 +1,122 @@
 import os
+from datetime import timedelta
+
 import certifi
-os.environ["SSL_CERT_FILE"] = certifi.where()
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-try:
-    from groq import Groq
-except Exception:
-    Groq = None
+from db import get_db, init_db
 from dotenv import load_dotenv
-# Graceful bcrypt import
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    get_jwt_identity,
+    jwt_required,
+)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 try:
     import bcrypt
-except Exception:
-    bcrypt = None
-import hashlib
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from datetime import timedelta
-from db import get_db, init_db
+except ImportError as exc:
+    raise RuntimeError("bcrypt is required for secure password storage") from exc
 
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
 load_dotenv()
 
 app = Flask(__name__)
+app_environment = os.getenv("APP_ENV", "development").lower()
+is_production = app_environment == "production" or bool(os.getenv("VERCEL"))
+jwt_secret = os.getenv("JWT_SECRET_KEY")
+
+if is_production and (not jwt_secret or jwt_secret == "ambider-jd-secret-2025"):
+    raise RuntimeError("A unique JWT_SECRET_KEY is required in production")
+
+app.config["JWT_SECRET_KEY"] = jwt_secret or "development-only-change-me"
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
+    hours=int(os.getenv("JWT_EXPIRY_HOURS", "8"))
+)
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
+
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": cors_origins,
+            "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+        }
+    },
+)
+
+jwt = JWTManager(app)
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+)
 
 _db_initialized = False
+
 
 @app.before_request
 def ensure_db_initialized():
     global _db_initialized
     if not _db_initialized:
-        try:
-            init_db()
-            _db_initialized = True
-        except Exception as e:
-            print("Warning: Failed to initialize database:", e)
+        init_db()
+        _db_initialized = True
 
-CORS(app, resources={
-    r"/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
 
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "ambider-jd-secret-2025")
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
-jwt = JWTManager(app)
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({"error": "Request body is too large"}), 413
+
+
+@app.errorhandler(429)
+def rate_limit_exceeded(_error):
+    return jsonify({"error": "Too many requests. Please try again later."}), 429
+
+
+def get_json_payload():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return None, (jsonify({"error": "A JSON object request body is required"}), 400)
+    return data, None
+
+
+def validate_text(data, field, maximum, required=False):
+    value = data.get(field, "")
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        return None, f"{field} must be text"
+    value = value.strip()
+    if required and not value:
+        return None, f"{field} is required"
+    if len(value) > maximum:
+        return None, f"{field} must be at most {maximum} characters"
+    return value, None
+
 
 # Initialize Groq client if API key is provided
 groq_key = os.getenv("GROQ_API_KEY")
@@ -55,42 +127,56 @@ else:
 
 # --- Authentication Endpoints ---
 
+
 @app.route("/", methods=["GET"])
 @app.route("/health", methods=["GET"])
 @app.route("/api/health", methods=["GET"])
 def health_check():
-    return jsonify({
-        "status": "Flask is running",
-        "message": "AmbiDer API Backend is running smoothly!"
-    }), 200
+    return jsonify(
+        {
+            "status": "Flask is running",
+            "message": "AmbiDer API Backend is running smoothly!",
+        }
+    ), 200
+
 
 @app.route("/auth/register", methods=["POST"])
 @app.route("/api/auth/register", methods=["POST"])
+@limiter.limit("5 per hour")
 def register():
-    data = request.get_json()
-    full_name = data.get("full_name")
-    email = data.get("email")
+    data, error_response = get_json_payload()
+    if error_response:
+        return error_response
+
+    full_name, error = validate_text(data, "full_name", 100, required=True)
+    if error:
+        return jsonify({"error": error}), 400
+    email, error = validate_text(data, "email", 254, required=True)
+    if error or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return jsonify({"error": "A valid email is required"}), 400
     password = data.get("password")
+    if not isinstance(password, str) or len(password) < 12:
+        return jsonify({"error": "Password must be at least 12 characters"}), 400
 
-    if not full_name or not email or not password:
-        return jsonify({"error": "Missing required fields"}), 400
+    hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode(
+        "utf-8"
+    )
 
-    if bcrypt:
-        hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    else:
-        # Fallback simple SHA-256 hash
-        hashed_pw = hashlib.sha256(password.encode('utf-8')).hexdigest()
-        
     try:
         db_client = get_db()
         db_client.execute(
             "INSERT INTO users (full_name, email, password) VALUES (?, ?, ?)",
-            (full_name, email, hashed_pw)
+            (full_name, email, hashed_pw),
         )
         result = db_client.execute("SELECT id FROM users WHERE email = ?", (email,))
         user_id = result.rows[0][0]
         access_token = create_access_token(identity=str(user_id))
-        return jsonify({"token": access_token, "user": {"id": user_id, "full_name": full_name, "email": email}}), 201
+        return jsonify(
+            {
+                "token": access_token,
+                "user": {"id": user_id, "full_name": full_name, "email": email},
+            }
+        ), 201
     except Exception as e:
         if "UNIQUE constraint failed" in str(e):
             return jsonify({"error": "Email already exists"}), 409
@@ -99,29 +185,41 @@ def register():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/auth/login", methods=["POST"])
 @app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("10 per hour")
 def login():
-    data = request.get_json()
-    email = data.get("email")
+    data, error_response = get_json_payload()
+    if error_response:
+        return error_response
+    email, error = validate_text(data, "email", 254, required=True)
     password = data.get("password")
+    if error or not isinstance(password, str) or not password:
+        return jsonify({"error": "Email and password are required"}), 400
 
     try:
         db_client = get_db()
-        result = db_client.execute("SELECT id, full_name, email, password FROM users WHERE email = ?", (email,))
+        result = db_client.execute(
+            "SELECT id, full_name, email, password FROM users WHERE email = ?", (email,)
+        )
         if not result.rows:
             return jsonify({"error": "Invalid email or password"}), 401
 
         user = result.rows[0]
         user_id, full_name, db_email, hashed_pw = user[0], user[1], user[2], user[3]
 
-        if bcrypt:
-            password_match = bcrypt.checkpw(password.encode('utf-8'), hashed_pw.encode('utf-8'))
-        else:
-            password_match = hashlib.sha256(password.encode('utf-8')).hexdigest() == hashed_pw
+        password_match = bcrypt.checkpw(
+            password.encode("utf-8"), hashed_pw.encode("utf-8")
+        )
         if password_match:
             access_token = create_access_token(identity=str(user_id))
-            return jsonify({"token": access_token, "user": {"id": user_id, "full_name": full_name, "email": db_email}}), 200
+            return jsonify(
+                {
+                    "token": access_token,
+                    "user": {"id": user_id, "full_name": full_name, "email": db_email},
+                }
+            ), 200
         else:
             return jsonify({"error": "Invalid email or password"}), 401
 
@@ -131,6 +229,7 @@ def login():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/auth/me", methods=["GET"])
 @app.route("/api/auth/me", methods=["GET"])
 @jwt_required()
@@ -138,7 +237,9 @@ def get_me():
     user_id = get_jwt_identity()
     try:
         db_client = get_db()
-        result = db_client.execute("SELECT id, full_name, email FROM users WHERE id = ?", (user_id,))
+        result = db_client.execute(
+            "SELECT id, full_name, email FROM users WHERE id = ?", (user_id,)
+        )
         if result.rows:
             user = result.rows[0]
             return jsonify({"id": user[0], "full_name": user[1], "email": user[2]})
@@ -149,22 +250,34 @@ def get_me():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 # --- Core App Endpoints ---
 
-def build_prompt(job_title, industry, experience, skills,
-                 tone, company_name, department="",
-                 location="", reporting_to="",
-                 employment_type="", nature_of_job="",
-                 additional_notes="", reference_jds=[]):
+
+def build_prompt(
+    job_title,
+    industry,
+    experience,
+    skills,
+    tone,
+    company_name,
+    department="",
+    location="",
+    reporting_to="",
+    employment_type="",
+    nature_of_job="",
+    additional_notes="",
+    reference_jds=[],
+):
 
     # Format skills as a clear list
-    skill_list = [s.strip() for s in skills.split(',') if s.strip()]
-    skills_formatted = '\n'.join([f'  - {s}' for s in skill_list])
+    skill_list = [s.strip() for s in skills.split(",") if s.strip()]
+    skills_formatted = "\n".join([f"  - {s}" for s in skill_list])
 
     # Build reference examples if available
     examples = ""
     if reference_jds:
-        examples = f"""
+        examples = """
 REFERENCE EXAMPLES — Study these top-rated real Job Descriptions 
 from the same industry. Match their quality, structure and depth:
 
@@ -256,30 +369,58 @@ FINAL CHECK BEFORE OUTPUTTING:
 
     return prompt
 
+
 @app.route("/generate", methods=["POST"])
 @app.route("/api/generate", methods=["POST"])
-@jwt_required(optional=True)
+@jwt_required()
+@limiter.limit("20 per hour")
 def generate_jd():
     if not client:
-        return jsonify({"error": "AI service not configured"}), 500
-    data = request.get_json()
-    job_title = data.get("job_title", "")
-    industry = data.get("industry", "IT")
-    department = data.get("department", "")
-    experience = data.get("experience", "")
-    employment_type = data.get("employment_type", "")
-    location = data.get("location", "")
-    skills = data.get("skills", "")
-    tone = data.get("tone", "")
-    company_name = data.get("company_name", "")
-    nature_of_job = data.get("nature_of_job", "")
-    reporting_to = data.get("reporting_to", "")
-    additional_notes = data.get("additional_notes", "")
+        return jsonify({"error": "AI service not configured"}), 503
+    data, error_response = get_json_payload()
+    if error_response:
+        return error_response
+
+    fields = {
+        "job_title": (200, True),
+        "industry": (100, False),
+        "department": (100, False),
+        "experience": (100, False),
+        "employment_type": (100, False),
+        "location": (200, False),
+        "skills": (2000, True),
+        "tone": (100, False),
+        "company_name": (200, False),
+        "nature_of_job": (100, False),
+        "reporting_to": (200, False),
+        "additional_notes": (5000, False),
+    }
+    values = {}
+    for field, (maximum, required) in fields.items():
+        value, error = validate_text(data, field, maximum, required)
+        if error:
+            return jsonify({"error": error}), 400
+        values[field] = value
+
+    job_title = values["job_title"]
+    industry = values["industry"] or "IT"
+    department = values["department"]
+    experience = values["experience"]
+    employment_type = values["employment_type"]
+    location = values["location"]
+    skills = values["skills"]
+    tone = values["tone"]
+    company_name = values["company_name"]
+    nature_of_job = values["nature_of_job"]
+    reporting_to = values["reporting_to"]
+    additional_notes = values["additional_notes"]
 
     reference_jds = []
     try:
         db_client = get_db()
-        result = db_client.execute("SELECT jd_text FROM reference_jds WHERE industry = ? LIMIT 2", (industry,))
+        result = db_client.execute(
+            "SELECT jd_text FROM reference_jds WHERE industry = ? LIMIT 2", (industry,)
+        )
         for row in result.rows:
             reference_jds.append({"jd_text": row[0]})
         db_client.close()
@@ -299,7 +440,7 @@ def generate_jd():
         employment_type=employment_type,
         nature_of_job=nature_of_job,
         additional_notes=additional_notes,
-        reference_jds=reference_jds
+        reference_jds=reference_jds,
     )
 
     try:
@@ -313,6 +454,7 @@ def generate_jd():
         return jsonify({"jd": jd_text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/save", methods=["POST"])
 @app.route("/api/save", methods=["POST"])
@@ -335,14 +477,14 @@ def save_jd():
                 data.get("tone", ""),
                 data.get("department", ""),
                 data.get("location", ""),
-                data.get("jd_text", "")
-            )
+                data.get("jd_text", ""),
+            ),
         )
-        
+
         # Get last insert id
         result = db_client.execute("SELECT last_insert_rowid()")
         last_id = result.rows[0][0]
-        
+
         return jsonify({"id": last_id, "message": "Saved successfully"}), 201
     except Exception as e:
         print("Save error:", e)
@@ -351,15 +493,23 @@ def save_jd():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/edit", methods=["POST"])
 @app.route("/api/edit", methods=["POST"])
-@jwt_required(optional=True)
+@jwt_required()
+@limiter.limit("30 per hour")
 def edit_jd():
     if not client:
-        return jsonify({"error": "AI service not configured"}), 500
-    data = request.get_json()
-    current_jd = data.get("current_jd", "")
-    instruction = data.get("instruction", "")
+        return jsonify({"error": "AI service not configured"}), 503
+    data, error_response = get_json_payload()
+    if error_response:
+        return error_response
+    current_jd, error = validate_text(data, "current_jd", 50000, required=True)
+    if error:
+        return jsonify({"error": error}), 400
+    instruction, error = validate_text(data, "instruction", 1000, required=True)
+    if error:
+        return jsonify({"error": error}), 400
 
     prompt = f"""Here is the current Job Description:
 {current_jd}
@@ -382,27 +532,39 @@ Apply the change and return the complete updated Job Description keeping the sam
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/save/edit", methods=["POST"])
 @app.route("/api/save/edit", methods=["POST"])
 @jwt_required()
 def save_edit():
-    data = request.get_json()
+    data, error_response = get_json_payload()
+    if error_response:
+        return error_response
     jd_id = data.get("jd_id")
-    instruction = data.get("instruction")
-    updated_jd = data.get("updated_jd")
-
-    if not jd_id:
-        return jsonify({"error": "Missing jd_id"}), 400
+    if not isinstance(jd_id, int) or jd_id <= 0:
+        return jsonify({"error": "jd_id must be a positive integer"}), 400
+    instruction, error = validate_text(data, "instruction", 1000, required=True)
+    if error:
+        return jsonify({"error": error}), 400
+    updated_jd, error = validate_text(data, "updated_jd", 50000, required=True)
+    if error:
+        return jsonify({"error": error}), 400
 
     try:
         db_client = get_db()
+        user_id = get_jwt_identity()
+        owner = db_client.execute(
+            "SELECT id FROM saved_jds WHERE id = ? AND user_id = ?", (jd_id, user_id)
+        )
+        if not owner.rows:
+            return jsonify({"error": "JD not found or unauthorized"}), 404
         db_client.execute(
             "INSERT INTO jd_edits (jd_id, instruction, updated_jd) VALUES (?, ?, ?)",
-            (jd_id, instruction, updated_jd)
+            (jd_id, instruction, updated_jd),
         )
         db_client.execute(
             "UPDATE saved_jds SET jd_text = ?, is_edited = 1 WHERE id = ?",
-            (updated_jd, jd_id)
+            (updated_jd, jd_id),
         )
         return jsonify({"message": "Edit saved successfully"}), 200
     except Exception as e:
@@ -410,6 +572,7 @@ def save_edit():
     finally:
         if "db_client" in locals() and db_client:
             db_client.close()
+
 
 @app.route("/saved", methods=["GET"])
 @app.route("/api/saved", methods=["GET"])
@@ -421,25 +584,27 @@ def get_saved_jds():
         db_client = get_db()
         query = "SELECT id, job_title, company_name, industry, created_at, jd_text FROM saved_jds WHERE user_id = ?"
         params = [user_id]
-        
+
         if search:
             query += " AND (job_title LIKE ? OR company_name LIKE ?)"
             params.append(f"%{search}%")
             params.append(f"%{search}%")
-            
+
         query += " ORDER BY created_at DESC"
-        
+
         result = db_client.execute(query, params)
         jds = []
         for row in result.rows:
-            jds.append({
-                "id": row[0],
-                "job_title": row[1],
-                "company_name": row[2],
-                "industry": row[3],
-                "created_at": row[4],
-                "jd_text": row[5]
-            })
+            jds.append(
+                {
+                    "id": row[0],
+                    "job_title": row[1],
+                    "company_name": row[2],
+                    "industry": row[3],
+                    "created_at": row[4],
+                    "jd_text": row[5],
+                }
+            )
 
         return jsonify(jds)
     except Exception as e:
@@ -448,6 +613,7 @@ def get_saved_jds():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/saved/<int:jd_id>", methods=["DELETE"])
 @app.route("/api/saved/<int:jd_id>", methods=["DELETE"])
 @jwt_required()
@@ -455,7 +621,9 @@ def delete_saved_jd(jd_id):
     user_id = get_jwt_identity()
     try:
         db_client = get_db()
-        check = db_client.execute("SELECT id FROM saved_jds WHERE id = ? AND user_id = ?", (jd_id, user_id))
+        check = db_client.execute(
+            "SELECT id FROM saved_jds WHERE id = ? AND user_id = ?", (jd_id, user_id)
+        )
         if not check.rows:
             return jsonify({"error": "JD not found or unauthorized"}), 404
 
@@ -468,6 +636,7 @@ def delete_saved_jd(jd_id):
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/history", methods=["GET"])
 @app.route("/api/history", methods=["GET"])
 @jwt_required()
@@ -477,28 +646,33 @@ def get_history():
         db_client = get_db()
         jds_result = db_client.execute(
             "SELECT id, job_title, industry, created_at, jd_text, company_name FROM saved_jds WHERE user_id = ? ORDER BY created_at DESC",
-            (user_id,)
+            (user_id,),
         )
-        
+
         history = []
         for jd in jds_result.rows:
             jd_id = jd[0]
             edits_result = db_client.execute(
                 "SELECT instruction, updated_jd, edited_at FROM jd_edits WHERE jd_id = ? ORDER BY edited_at ASC",
-                (jd_id,)
+                (jd_id,),
             )
-            edits = [{"instruction": e[0], "updated_jd": e[1], "edited_at": e[2]} for e in edits_result.rows]
+            edits = [
+                {"instruction": e[0], "updated_jd": e[1], "edited_at": e[2]}
+                for e in edits_result.rows
+            ]
 
-            history.append({
-                "id": jd_id,
-                "job_title": jd[1],
-                "industry": jd[2],
-                "company_name": jd[5],
-                "created_at": jd[3],
-                "original_jd": jd[4] if not edits else "See first edit",
-                "edits": edits,
-                "edit_count": len(edits)
-            })
+            history.append(
+                {
+                    "id": jd_id,
+                    "job_title": jd[1],
+                    "industry": jd[2],
+                    "company_name": jd[5],
+                    "created_at": jd[3],
+                    "original_jd": jd[4] if not edits else "See first edit",
+                    "edits": edits,
+                    "edit_count": len(edits),
+                }
+            )
 
         return jsonify(history)
     except Exception as e:
@@ -508,6 +682,7 @@ def get_history():
         if "db_client" in locals() and db_client:
             db_client.close()
 
+
 @app.route("/analytics", methods=["GET"])
 @app.route("/api/analytics", methods=["GET"])
 @jwt_required()
@@ -515,61 +690,77 @@ def get_analytics():
     user_id = get_jwt_identity()
     try:
         db_client = get_db()
-        r1 = db_client.execute("SELECT COUNT(*) FROM saved_jds WHERE user_id = ?", (user_id,))
+        r1 = db_client.execute(
+            "SELECT COUNT(*) FROM saved_jds WHERE user_id = ?", (user_id,)
+        )
         total_jds = r1.rows[0][0]
 
         r2 = db_client.execute(
             "SELECT industry, COUNT(*) as c FROM saved_jds WHERE user_id = ? AND industry != '' GROUP BY industry ORDER BY c DESC LIMIT 1",
-            (user_id,)
+            (user_id,),
         )
         most_used_industry = r2.rows[0][0] if r2.rows else "N/A"
 
         r3 = db_client.execute(
             "SELECT COUNT(*) FROM jd_edits e JOIN saved_jds s ON e.jd_id = s.id WHERE s.user_id = ?",
-            (user_id,)
+            (user_id,),
         )
         total_edits = r3.rows[0][0]
 
         r4 = db_client.execute(
             "SELECT COUNT(*) FROM saved_jds WHERE user_id = ? AND created_at >= date('now', '-7 days')",
-            (user_id,)
+            (user_id,),
         )
         jds_this_week = r4.rows[0][0]
 
         r5 = db_client.execute(
             "SELECT industry, COUNT(*) as count FROM saved_jds WHERE user_id = ? AND industry != '' GROUP BY industry",
-            (user_id,)
+            (user_id,),
         )
         industry_data = [{"industry": r[0], "count": r[1]} for r in r5.rows]
 
         r6 = db_client.execute(
             "SELECT job_title, COUNT(*) as count, MAX(created_at) as last_generated FROM saved_jds WHERE user_id = ? GROUP BY job_title ORDER BY count DESC LIMIT 5",
-            (user_id,)
+            (user_id,),
         )
-        top_titles = [{"job_title": r[0], "count": r[1], "last_generated": r[2]} for r in r6.rows]
+        top_titles = [
+            {"job_title": r[0], "count": r[1], "last_generated": r[2]} for r in r6.rows
+        ]
 
         r7 = db_client.execute(
             "SELECT date(created_at) as date, COUNT(*) as count FROM saved_jds WHERE user_id = ? AND created_at >= date('now', '-30 days') GROUP BY date ORDER BY date ASC",
-            (user_id,)
+            (user_id,),
         )
         timeline_data = [{"date": r[0], "count": r[1]} for r in r7.rows]
 
-        return jsonify({
-            "stats": {
-                "total_jds": total_jds,
-                "most_used_industry": most_used_industry,
-                "total_edits": total_edits,
-                "jds_this_week": jds_this_week
-            },
-            "industry_data": [{"name": d["industry"], "value": d["count"]} for d in industry_data],
-            "timeline_data": timeline_data,
-            "top_titles": [{"title": t["job_title"], "count": t["count"], "last_generated": t["last_generated"]} for t in top_titles]
-        })
+        return jsonify(
+            {
+                "stats": {
+                    "total_jds": total_jds,
+                    "most_used_industry": most_used_industry,
+                    "total_edits": total_edits,
+                    "jds_this_week": jds_this_week,
+                },
+                "industry_data": [
+                    {"name": d["industry"], "value": d["count"]} for d in industry_data
+                ],
+                "timeline_data": timeline_data,
+                "top_titles": [
+                    {
+                        "title": t["job_title"],
+                        "count": t["count"],
+                        "last_generated": t["last_generated"],
+                    }
+                    for t in top_titles
+                ],
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
         if "db_client" in locals() and db_client:
             db_client.close()
+
 
 @app.route("/ats-score", methods=["POST"])
 @app.route("/api/ats-score", methods=["POST"])
@@ -614,8 +805,10 @@ Respond ONLY with a JSON object in this exact format, no other text:
         )
         response_text = chat_completion.choices[0].message.content.strip()
         # Extract JSON from response
-        import json, re
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        import json
+        import re
+
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
             return jsonify(result)
@@ -623,6 +816,7 @@ Respond ONLY with a JSON object in this exact format, no other text:
             return jsonify({"error": "Could not parse AI response"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=False)
