@@ -39,8 +39,10 @@ app_environment = os.getenv("APP_ENV", "development").lower()
 is_production = app_environment == "production" or bool(os.getenv("VERCEL"))
 jwt_secret = os.getenv("JWT_SECRET_KEY")
 
+_startup_errors = []
+
 if is_production and (not jwt_secret or jwt_secret == "ambider-jd-secret-2025"):
-    raise RuntimeError("A unique JWT_SECRET_KEY is required in production")
+    _startup_errors.append("Server misconfigured: missing JWT_SECRET_KEY")
 
 app.config["JWT_SECRET_KEY"] = jwt_secret or "development-only-change-me"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
@@ -64,7 +66,10 @@ CORS(
 jwt = JWTManager(app)
 rate_limit_storage_uri = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
 if is_production and rate_limit_storage_uri == "memory://":
-    raise RuntimeError("RATELIMIT_STORAGE_URI is required in production")
+    app.logger.warning(
+        "RATELIMIT_STORAGE_URI is not set in production; falling back to "
+        "in-memory rate limiting per instance"
+    )
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
@@ -96,6 +101,14 @@ def ensure_db_initialized():
     if not _db_initialized:
         init_db()
         _db_initialized = True
+
+
+@app.before_request
+def enforce_startup_configuration():
+    if request.endpoint == "health_check":
+        return None
+    if _startup_errors:
+        return jsonify({"error": _startup_errors[0]}), 503
 
 
 @app.after_request

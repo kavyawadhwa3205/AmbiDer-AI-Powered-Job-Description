@@ -1,0 +1,1 @@
+This is the only vercel.json for this project. Do not add another one inside frontend/ or backend/ — Vercel will ignore it while this root config uses the legacy builds format, but it causes confusion for contributors.
