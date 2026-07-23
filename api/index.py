@@ -1,15 +1,12 @@
-import sys
 import os
+import sys
 
-# Add root directory and backend directory to sys.path
-root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-backend_dir = os.path.join(root_dir, "backend")
+# Add backend directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
-if root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
+import app as flask_app
 
-from backend.app import app
+app = flask_app.app
 
-# Export app for Vercel Serverless Function
+# Vercel needs the app object at module level
+# Do not call app.run() here

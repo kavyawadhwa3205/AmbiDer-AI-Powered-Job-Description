@@ -48,22 +48,17 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
 )
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
 
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"
-    ).split(",")
-    if origin.strip()
-]
 CORS(
     app,
-    resources={
-        r"/*": {
-            "origins": cors_origins,
-            "methods": ["GET", "POST", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
-        }
-    },
+    resources={r"/*": {"origins": "*"}},
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Access-Control-Allow-Credentials",
+        "Access-Control-Allow-Origin",
+    ],
+    supports_credentials=False,
 )
 
 jwt = JWTManager(app)
@@ -78,6 +73,19 @@ limiter = Limiter(
 )
 
 _db_initialized = False
+
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, DELETE, OPTIONS"
+        )
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.status_code = 200
+        return response
 
 
 @app.before_request
@@ -883,4 +891,5 @@ Respond ONLY with a JSON object in this exact format, no other text:
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host="0.0.0.0", port=port)
